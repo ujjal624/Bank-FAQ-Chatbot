@@ -186,7 +186,7 @@ def chat():
         chat_history = session['chat_history']
         
         # Step 1: Retrieve relevant FAQs using RAG first with chat history context
-        retrieved_chunks = rag_engine.retrieve_similar_chunks(user_query, top_k=10, chat_history=chat_history[-20:] if chat_history else None, num_chat_pairs=10)
+        retrieved_chunks, final_query = rag_engine.retrieve_similar_chunks(user_query, top_k=10, chat_history=chat_history[-20:] if chat_history else None, num_chat_pairs=10)
         # print("RAG Response: ", retrieved_chunks)
         
         # Step 2: Check relevance with context and chat history
@@ -207,7 +207,7 @@ def chat():
             })
         
         # Step 3: Generate answer using LLM
-        answer = generate_answer(user_query, retrieved_chunks, chat_history)
+        answer = generate_answer(final_query, retrieved_chunks, chat_history)
         
         # Add to chat history
         chat_history.append({'role': 'user', 'content': user_query})

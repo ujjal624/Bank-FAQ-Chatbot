@@ -193,7 +193,7 @@ Examples:
         
         logger.info(f"Retrieved {len(results)} chunks. Top similarity score: {results[0]['similarity_score']:.4f}")
         
-        return results
+        return results, expanded_query
     
     def format_context_for_llm(self, retrieved_chunks):
         """
