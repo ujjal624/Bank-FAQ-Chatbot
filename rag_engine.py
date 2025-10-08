@@ -3,6 +3,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import logging
+from gemini_client import GeminiClient
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -39,6 +40,25 @@ class RAGEngine:
         # Generate embeddings for all chunks
         self.chunk_embeddings = self._generate_embeddings()
         logger.info("Generated embeddings for all chunks")
+
+        # Initialize Gemini client for query expansion
+        self.gemini_client = GeminiClient()
+        self.EXPAND_QUERY_PROMPT = """You are an expert query expander for a banking domain search engine. Your task is to rewrite a user's query to be more descriptive for a semantic search. Focus on the core concepts.
+
+For a given user query, you should:
+1.  Identify the core subject.
+2.  If it's an acronym, expand it.
+3.  Remove all unnecessary words. For example, if the user query is "how to make payment for my loan?", the expanded query should be "make payment for loan".
+
+Examples:
+- "how to make payment for my loan?" -> "make payment for loan"
+- "what is CDF" -> "cardholder dispute form?"
+
+**User Query:**
+`{query}`
+
+**Expanded Search Query:**"""
+
     
     def _load_faqs(self, faq_file):
         """
@@ -87,6 +107,18 @@ class RAGEngine:
         texts = [chunk['text'] for chunk in self.chunks]
         embeddings = self.model.encode(texts, show_progress_bar=False)
         return embeddings
+
+    def _expand_query(self, query):
+        """
+        Expand the user query for better search results.
+        """
+        # Heuristic to avoid expanding long queries
+        if len(query.split()) > 3:
+            return query
+
+        prompt = self.EXPAND_QUERY_PROMPT.format(query=query)
+        expanded_query = self.gemini_client.query(prompt)
+        return expanded_query.strip()
     
     def retrieve_similar_chunks(self, query, top_k=10, chat_history=None, num_chat_pairs=10):
         """
@@ -101,13 +133,17 @@ class RAGEngine:
             list: List of most similar chunks with similarity scores
         """
         logger.info(f"Retrieving top {top_k} similar chunks for query: '{query[:50]}...'")
+
+        # Expand the query for better retrieval
+        expanded_query = self._expand_query(query)
+        logger.info(f"Expanded query: '{expanded_query}'")
         
         # Build enhanced query with chat history context
-        enhanced_query = query
+        enhanced_query = expanded_query
         if chat_history and len(chat_history) > 0:
             # Include recent conversation context to improve retrieval
             history_context = " ".join([msg['content'] for msg in chat_history[-2*num_chat_pairs:]])  # Last 10 pairs
-            enhanced_query = f"{history_context} {query}"
+            enhanced_query = f"{history_context} {expanded_query}"
             logger.info(f"Enhanced query with {len(chat_history[-2*num_chat_pairs:])} messages from chat history")
         
         # Generate embedding for query

@@ -114,7 +114,10 @@ def generate_answer(query, retrieved_chunks, chat_history):
     
     # Check if the query is well-covered by the retrieved FAQs
     top_similarity = retrieved_chunks[0]['similarity_score'] if retrieved_chunks else 0
+    # Format context from retrieved chunks
+    context = rag_engine.format_context_for_llm(retrieved_chunks)
     
+    print("How context is being formatted: ", context)
     # If similarity is low, treat as unknown query
     if top_similarity < 0.5:
         logger.warning(f"Low similarity score ({top_similarity:.2f}) - treating as unknown query")
@@ -129,10 +132,10 @@ def generate_answer(query, retrieved_chunks, chat_history):
         logger.info("Returned predetermined response for unknown query")
         return response
     
-    # Format context from retrieved chunks
-    context = rag_engine.format_context_for_llm(retrieved_chunks)
+    # # Format context from retrieved chunks
+    # context = rag_engine.format_context_for_llm(retrieved_chunks)
     
-    print("How context is being formatted: ", context)
+    # print("How context is being formatted: ", context)
     # Build the prompt
     prompt = f"""You are a helpful HDFC Bank customer service assistant. Answer the user's question based on the provided FAQ knowledge base.
 
