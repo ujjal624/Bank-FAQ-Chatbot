@@ -114,7 +114,10 @@ def generate_answer(query, retrieved_chunks, chat_history):
     
     # Check if the query is well-covered by the retrieved FAQs
     top_similarity = retrieved_chunks[0]['similarity_score'] if retrieved_chunks else 0
+    # Format context from retrieved chunks
+    context = rag_engine.format_context_for_llm(retrieved_chunks)
     
+    print("How context is being formatted: ", context)
     # If similarity is low, treat as unknown query
     if top_similarity < 0.5:
         logger.warning(f"Low similarity score ({top_similarity:.2f}) - treating as unknown query")
@@ -129,10 +132,10 @@ def generate_answer(query, retrieved_chunks, chat_history):
         logger.info("Returned predetermined response for unknown query")
         return response
     
-    # Format context from retrieved chunks
-    context = rag_engine.format_context_for_llm(retrieved_chunks)
+    # # Format context from retrieved chunks
+    # context = rag_engine.format_context_for_llm(retrieved_chunks)
     
-    print("How context is being formatted: ", context)
+    # print("How context is being formatted: ", context)
     # Build the prompt
     prompt = f"""You are a helpful HDFC Bank customer service assistant. Answer the user's question based on the provided FAQ knowledge base.
 
@@ -141,9 +144,12 @@ def generate_answer(query, retrieved_chunks, chat_history):
 INSTRUCTIONS:
 1. Use the FAQ information above to answer the question accurately and concisely.
 2. If the information is directly available in the FAQs, provide a clear answer.
-3. Be professional, polite, and helpful.
+3. Do not mention the FAQ number in the answer.
 4. If you're not completely sure the FAQs cover the user's specific question, acknowledge this and provide the closest relevant information available.
 5. Keep your response natural and conversational.
+6. Answer the question in such a way that it can be directly told to a customer.
+7. Keep the formatting simple.
+
 
 User's Question: {query}
 
@@ -180,7 +186,7 @@ def chat():
         chat_history = session['chat_history']
         
         # Step 1: Retrieve relevant FAQs using RAG first with chat history context
-        retrieved_chunks = rag_engine.retrieve_similar_chunks(user_query, top_k=10, chat_history=chat_history[-20:] if chat_history else None, num_chat_pairs=10)
+        retrieved_chunks, final_query = rag_engine.retrieve_similar_chunks(user_query, top_k=10, chat_history=chat_history[-20:] if chat_history else None, num_chat_pairs=10)
         # print("RAG Response: ", retrieved_chunks)
         
         # Step 2: Check relevance with context and chat history
@@ -201,7 +207,7 @@ def chat():
             })
         
         # Step 3: Generate answer using LLM
-        answer = generate_answer(user_query, retrieved_chunks, chat_history)
+        answer = generate_answer(final_query, retrieved_chunks, chat_history)
         
         # Add to chat history
         chat_history.append({'role': 'user', 'content': user_query})

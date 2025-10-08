@@ -150,15 +150,7 @@ function addMessage(content, type, metadata = {}) {
             contentDiv.innerHTML += '<span class="tag tag-clarification">Needs Clarification</span>';
         }
         
-        // Show timestamp
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-        metadataDiv.textContent = timeStr;
-        
-        // Show similarity score for debugging (only if high enough)
-        if (metadata.similarityScore && metadata.similarityScore > 0.3) {
-            metadataDiv.textContent += ` • Relevance: ${(metadata.similarityScore * 100).toFixed(0)}%`;
-        }
+        // User requested to remove time and relevance score from the UI
         
         if (metadataDiv.textContent) {
             contentDiv.appendChild(metadataDiv);
