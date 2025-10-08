@@ -47,17 +47,28 @@ class RAGEngine:
 
 For a given user query, you should:
 1.  Identify the core subject.
-2.  If it's an acronym, Keep both the acronym and the expanded form.
+2.  If it's an acronym, expand it.
 3.  Remove all unnecessary words. For example, if the user query is "how to make payment for my loan?", the expanded query should be "make payment for loan".
 
 Examples:
 - "how to make payment for my loan?" -> "make payment for loan"
-- "what is CDF" -> "CDF - cardholder dispute form?"
+- "what is CDF" -> "cardholder dispute form?"
 
 **User Query:**
 `{query}`
 
 **Expanded Search Query:**"""
+        self.REWRITE_QUERY_PROMPT = """You are an expert query rewriter. Your task is to take a conversation history and a new user query and rewrite the new query to be self-contained. The user's new query might be a follow-up question that relies on the context of the conversation. You must resolve pronouns and add the necessary context from the history.
+
+**Conversation History:**
+```
+{chat_history}
+```
+
+**User's New Query:**
+`{query}`
+
+**Rewritten, Self-Contained Query:**"""
 
     
     def _load_faqs(self, faq_file):
@@ -119,6 +130,22 @@ Examples:
         prompt = self.EXPAND_QUERY_PROMPT.format(query=query)
         expanded_query = self.gemini_client.query(prompt)
         return expanded_query.strip()
+
+    def _rewrite_query_with_history(self, query, chat_history):
+        if not chat_history:
+            return query
+
+        # Format the history
+        formatted_history = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
+
+        prompt = self.REWRITE_QUERY_PROMPT.format(
+            chat_history=formatted_history,
+            query=query
+        )
+        
+        rewritten_query = self.gemini_client.query(prompt)
+        logger.info(f"Rewritten query with history: '{rewritten_query.strip()}'")
+        return rewritten_query.strip()
     
     def retrieve_similar_chunks(self, query, top_k=10, chat_history=None, num_chat_pairs=10):
         """
@@ -132,46 +159,24 @@ Examples:
         Returns:
             list: List of most similar chunks with similarity scores
         """
-        logger.info(f"Retrieving top {top_k} similar chunks for query: '{query[:50]}...'")
+        logger.info(f"Original query: '{query[:50]}...'")
 
-        # Expand the query for better retrieval
-        expanded_query = self._expand_query(query)
-        logger.info(f"Expanded query: '{expanded_query}'")
+        # 1. Rewrite the query using chat history to make it self-contained
+        history_for_rewrite = None
+        if chat_history:
+            history_for_rewrite = chat_history[-2*num_chat_pairs:]
+        rewritten_query = self._rewrite_query_with_history(query, history_for_rewrite)
         
-        # Build enhanced query with relevant chat history context
-        enhanced_query = expanded_query
-        if chat_history and len(chat_history) > 0:
-            history_messages = [msg['content'] for msg in chat_history[-2*num_chat_pairs:]]
-            
-            # Embed the current query and the history messages
-            all_texts_to_embed = [expanded_query] + history_messages
-            all_embeddings = self.model.encode(all_texts_to_embed)
-            query_embedding = all_embeddings[0]
-            history_embeddings = all_embeddings[1:]
-            
-            # Calculate similarity scores
-            similarities = cosine_similarity([query_embedding], history_embeddings)[0]
-            
-            # Filter for relevant messages
-            relevant_history = []
-            similarity_threshold = 0.5 # This can be tuned
-            for i, score in enumerate(similarities):
-                if score > similarity_threshold:
-                    relevant_history.append(history_messages[i])
-            
-            if relevant_history:
-                history_context = " ".join(relevant_history)
-                enhanced_query = f"Query: {expanded_query} Chat History: {history_context} "
-                logger.info(f"Enhanced query with {len(relevant_history)} relevant messages from chat history")
-            else:
-                logger.info("No relevant chat history found to enhance the query.")
-
-        # Generate embedding for the final enhanced query
-        query_embedding_for_rag = self.model.encode([enhanced_query])[0]
+        # 2. Expand the (potentially rewritten) query for better retrieval
+        expanded_query = self._expand_query(rewritten_query)
+        logger.info(f"Final query for retrieval: '{expanded_query}'")
         
-        # Calculate cosine similarity between query and all chunks
+        # 3. Generate embedding for the final query
+        query_embedding = self.model.encode([expanded_query])[0]
+        
+        # 4. Perform similarity search
         similarities = cosine_similarity(
-            [query_embedding_for_rag],
+            [query_embedding],
             self.chunk_embeddings
         )[0]
         
