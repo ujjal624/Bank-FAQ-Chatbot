@@ -47,12 +47,12 @@ class RAGEngine:
 
 For a given user query, you should:
 1.  Identify the core subject.
-2.  If it's an acronym, expand it.
+2.  If it's an acronym, Keep both the acronym and the expanded form.
 3.  Remove all unnecessary words. For example, if the user query is "how to make payment for my loan?", the expanded query should be "make payment for loan".
 
 Examples:
 - "how to make payment for my loan?" -> "make payment for loan"
-- "what is CDF" -> "cardholder dispute form?"
+- "what is CDF" -> "CDF - cardholder dispute form?"
 
 **User Query:**
 `{query}`
@@ -138,20 +138,40 @@ Examples:
         expanded_query = self._expand_query(query)
         logger.info(f"Expanded query: '{expanded_query}'")
         
-        # Build enhanced query with chat history context
+        # Build enhanced query with relevant chat history context
         enhanced_query = expanded_query
         if chat_history and len(chat_history) > 0:
-            # Include recent conversation context to improve retrieval
-            history_context = " ".join([msg['content'] for msg in chat_history[-2*num_chat_pairs:]])  # Last 10 pairs
-            enhanced_query = f"{history_context} {expanded_query}"
-            logger.info(f"Enhanced query with {len(chat_history[-2*num_chat_pairs:])} messages from chat history")
-        
-        # Generate embedding for query
-        query_embedding = self.model.encode([enhanced_query])[0]
+            history_messages = [msg['content'] for msg in chat_history[-2*num_chat_pairs:]]
+            
+            # Embed the current query and the history messages
+            all_texts_to_embed = [expanded_query] + history_messages
+            all_embeddings = self.model.encode(all_texts_to_embed)
+            query_embedding = all_embeddings[0]
+            history_embeddings = all_embeddings[1:]
+            
+            # Calculate similarity scores
+            similarities = cosine_similarity([query_embedding], history_embeddings)[0]
+            
+            # Filter for relevant messages
+            relevant_history = []
+            similarity_threshold = 0.5 # This can be tuned
+            for i, score in enumerate(similarities):
+                if score > similarity_threshold:
+                    relevant_history.append(history_messages[i])
+            
+            if relevant_history:
+                history_context = " ".join(relevant_history)
+                enhanced_query = f"Query: {expanded_query} Chat History: {history_context} "
+                logger.info(f"Enhanced query with {len(relevant_history)} relevant messages from chat history")
+            else:
+                logger.info("No relevant chat history found to enhance the query.")
+
+        # Generate embedding for the final enhanced query
+        query_embedding_for_rag = self.model.encode([enhanced_query])[0]
         
         # Calculate cosine similarity between query and all chunks
         similarities = cosine_similarity(
-            [query_embedding],
+            [query_embedding_for_rag],
             self.chunk_embeddings
         )[0]
         

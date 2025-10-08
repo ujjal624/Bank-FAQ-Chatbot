@@ -144,9 +144,12 @@ def generate_answer(query, retrieved_chunks, chat_history):
 INSTRUCTIONS:
 1. Use the FAQ information above to answer the question accurately and concisely.
 2. If the information is directly available in the FAQs, provide a clear answer.
-3. Be professional, polite, and helpful.
+3. Do not mention the FAQ number in the answer.
 4. If you're not completely sure the FAQs cover the user's specific question, acknowledge this and provide the closest relevant information available.
 5. Keep your response natural and conversational.
+6. Answer the question in such a way that it can be directly told to a customer.
+7. Keep the formatting simple.
+
 
 User's Question: {query}
 
