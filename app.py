@@ -161,6 +161,33 @@ Your Answer:"""
     
     return response
 
+def split_combined_query(user_query):
+    """Use LLM to split a combined query into a list of individual queries."""
+    logger.info(f"Analyzing for combined query: '{user_query}'")
+    
+    prompt = f"""You are a query analysis expert. Your task is to determine if a user's query is a single question or a combined question containing multiple distinct topics.
+
+- If it is a single question, return the original query.
+- If it is a combined question, split it into a comma-separated list of individual, self-contained questions.
+
+Examples:
+- User Query: "What is the interest rate on a personal loan?"
+- Your Response: "What is the interest rate on a personal loan?"
+
+- User Query: "How do I reset my internet banking password and what are the forex card charges?"
+- Your Response: "How do I reset my internet banking password, what are the forex card charges?"
+
+- User Query: "Tell me about credit cards and also the process for applying for a new debit card"
+- Your Response: "Tell me about credit cards, what is the process for applying for a new debit card"
+
+User Query: "{user_query}"
+Your Response:"""
+    
+    response = llm_client.query(prompt)
+    logger.info(f"LLM analysis result for combined query: '{response}'")
+    return [q.strip() for q in response.split(',')]
+
+
 @app.route('/')
 def index():
     """Render main chat interface"""
@@ -185,44 +212,78 @@ def chat():
         
         chat_history = session['chat_history']
         
-        # Step 1: Retrieve relevant FAQs using RAG first with chat history context
-        retrieved_chunks, final_query = rag_engine.retrieve_similar_chunks(user_query, top_k=10, chat_history=chat_history[-20:] if chat_history else None, num_chat_pairs=10)
-        # print("RAG Response: ", retrieved_chunks)
+        # Step 1: Split combined queries
+        sub_queries = split_combined_query(user_query)
         
-        # Step 2: Check relevance with context and chat history
-        is_relevant, relevance_response = check_relevance(user_query, retrieved_chunks, chat_history)
-        
-        if not is_relevant:
-            logger.info("Query is irrelevant to banking - declining politely")
-            response = "I'm sorry, but I'm specifically designed to help with HDFC Bank and banking-related questions. Your question appears to be outside my area of expertise. Is there anything related to banking or HDFC Bank services that I can help you with?"
+        all_answers = []
+        all_retrieved_chunks = []
+
+        # Step 2: Process each sub-query
+        for sub_query in sub_queries:
+            if not sub_query:
+                continue
+
+            # Retrieve relevant FAQs for the sub-query
+            retrieved_chunks, final_query = rag_engine.retrieve_similar_chunks(
+                sub_query, 
+                top_k=5,  # Retrieve fewer chunks per sub-query
+                chat_history=chat_history[-10:] if chat_history else None, 
+                num_chat_pairs=5
+            )
+            all_retrieved_chunks.extend(retrieved_chunks)
+
+            # Check relevance of the sub-query
+            is_relevant, _ = check_relevance(sub_query, retrieved_chunks, chat_history)
             
-            # Add to chat history
-            chat_history.append({'role': 'user', 'content': user_query})
-            chat_history.append({'role': 'assistant', 'content': response})
-            session['chat_history'] = chat_history[-20:]  # Keep last 20 messages (10 interactions)
+            if is_relevant:
+                # Generate answer for the sub-query
+                answer = generate_answer(final_query, retrieved_chunks, chat_history)
+                all_answers.append(answer)
+            else:
+                # Handle irrelevant sub-query
+                all_answers.append(f"Regarding your question about '{sub_query}', I can only assist with banking-related topics.")
+
+        # Step 3: Combine answers
+        if len(all_answers) > 1:
+            # Use LLM to synthesize a single, coherent response
+            qa_pairs_str = ""
+            for i, (question, answer) in enumerate(zip(sub_queries, all_answers), 1):
+                qa_pairs_str += f"Question {i}: {question}\nAnswer {i}: {answer}\n\n"
+
+            synthesis_prompt = f"""You are a helpful AI assistant. Your task is to synthesize a final, conversational response to a user's original query based on a list of questions and their corresponding answers that have been generated internally.
+
+Combine the individual answers into a single, flowing response. Do not just list the answers. Make it sound natural and helpful.
+
+Original User Query:
+\"{user_query}\"
+
+Here are the questions that were processed and the answers that were found:
+
+{qa_pairs_str}
+
+Your Final, Synthesized Response:"""
             
-            return jsonify({
-                'response': response,
-                'relevant': False
-            })
-        
-        # Step 3: Generate answer using LLM
-        answer = generate_answer(final_query, retrieved_chunks, chat_history)
-        
+            final_response = llm_client.query(synthesis_prompt)
+            logger.info("Synthesized final response for combined query.")
+
+        elif all_answers:
+            final_response = all_answers[0]
+        else:
+            final_response = "I'm sorry, but I couldn't find a relevant answer to your question. Please try rephrasing."
+
         # Add to chat history
         chat_history.append({'role': 'user', 'content': user_query})
-        chat_history.append({'role': 'assistant', 'content': answer})
-        print("\n")
-        print("CHAT HISTORY: ", chat_history)
-        print("\n")
-        session['chat_history'] = chat_history[-20:]  # Keep last 20 messages (10 interactions)
+        chat_history.append({'role': 'assistant', 'content': final_response})
+        session['chat_history'] = chat_history[-20:]
         
         logger.info(f"Successfully processed query. Chat history length: {len(chat_history)}")
         
+        top_similarity = all_retrieved_chunks[0]['similarity_score'] if all_retrieved_chunks else 0
+
         return jsonify({
-            'response': answer,
-            'relevant': True,
-            'top_similarity': retrieved_chunks[0]['similarity_score'] if retrieved_chunks else 0
+            'response': final_response,
+            'relevant': True, # Overall relevance is handled per sub-query
+            'top_similarity': top_similarity
         })
         
     except Exception as e:
