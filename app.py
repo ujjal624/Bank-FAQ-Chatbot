@@ -120,7 +120,7 @@ def determine_unknown_query(query, retrieved_chunks, chat_history):
     # Format context from retrieved chunks
     context = rag_engine.format_context_for_llm(retrieved_chunks) if retrieved_chunks else "No relevant FAQ context found."
     
-    print("How context is being formatted: ", context)
+    # print("How context is being formatted: ", context)
     
     # Build evaluation prompt
     evaluation_prompt = f"""You are an intelligent assistant evaluating whether you have sufficient information to answer a user's query.

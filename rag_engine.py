@@ -2,6 +2,8 @@ import json
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from rank_bm25 import BM25Okapi
+import re
 import logging
 from gemini_client import GeminiClient
 
@@ -40,6 +42,10 @@ class RAGEngine:
         # Generate embeddings for all chunks
         self.chunk_embeddings = self._generate_embeddings()
         logger.info("Generated embeddings for all chunks")
+
+        # Initialize BM25 index for sparse retrieval
+        self.bm25_index = self._initialize_bm25()
+        logger.info("Initialized BM25 index for hybrid retrieval")
 
         # Initialize Gemini client for query expansion
         self.gemini_client = GeminiClient()
@@ -118,6 +124,36 @@ Examples:
         texts = [chunk['text'] for chunk in self.chunks]
         embeddings = self.model.encode(texts, show_progress_bar=False)
         return embeddings
+    
+    def _tokenize(self, text):
+        """
+        Tokenize text for BM25 (simple tokenization)
+        
+        Args:
+            text (str): Text to tokenize
+            
+        Returns:
+            list: List of tokens
+        """
+        # Convert to lowercase and split by whitespace and punctuation
+        text = text.lower()
+        # Keep alphanumeric and spaces, replace everything else with space
+        text = re.sub(r'[^a-z0-9\s]', ' ', text)
+        tokens = text.split()
+        return tokens
+    
+    def _initialize_bm25(self):
+        """
+        Initialize BM25 index from chunks
+        
+        Returns:
+            BM25Okapi: BM25 index
+        """
+        # Tokenize all chunk texts
+        tokenized_corpus = [self._tokenize(chunk['text']) for chunk in self.chunks]
+        # Create BM25 index
+        bm25 = BM25Okapi(tokenized_corpus)
+        return bm25
 
     def _expand_query(self, query):
         """
@@ -147,6 +183,60 @@ Examples:
         logger.info(f"Rewritten query with history: '{rewritten_query.strip()}'")
         return rewritten_query.strip()
     
+    def _hybrid_retrieval(self, query, top_k=10, bm25_weight=0.5, embedding_weight=0.5):
+        """
+        Perform hybrid retrieval combining BM25 and embedding-based search using Reciprocal Rank Fusion (RRF)
+        
+        Args:
+            query (str): Search query
+            top_k (int): Number of results to return
+            bm25_weight (float): Weight for BM25 scores (default 0.5)
+            embedding_weight (float): Weight for embedding scores (default 0.5)
+            
+        Returns:
+            list: List of top-k chunks with hybrid scores
+        """
+        # 1. BM25 Retrieval (sparse)
+        tokenized_query = self._tokenize(query)
+        bm25_scores = self.bm25_index.get_scores(tokenized_query)
+        
+        # Normalize BM25 scores to [0, 1]
+        if np.max(bm25_scores) > 0:
+            bm25_scores_normalized = bm25_scores / np.max(bm25_scores)
+        else:
+            bm25_scores_normalized = bm25_scores
+        
+        # 2. Embedding-based Retrieval (dense)
+        query_embedding = self.model.encode([query])[0]
+        embedding_similarities = cosine_similarity(
+            [query_embedding],
+            self.chunk_embeddings
+        )[0]
+        
+        # Embedding similarities are already in [0, 1] range for cosine similarity
+        
+        # 3. Combine scores using weighted linear combination
+        # Both scores are normalized, so we can combine them directly
+        hybrid_scores = (bm25_weight * bm25_scores_normalized) + (embedding_weight * embedding_similarities)
+        
+        # 4. Get top-k results
+        top_indices = np.argsort(hybrid_scores)[-top_k:][::-1]
+        
+        # 5. Prepare results with detailed scores
+        results = []
+        for idx in top_indices:
+            results.append({
+                'chunk': self.chunks[idx],
+                'similarity_score': float(hybrid_scores[idx]),
+                'bm25_score': float(bm25_scores_normalized[idx]),
+                'embedding_score': float(embedding_similarities[idx])
+            })
+        
+        logger.info(f"Hybrid retrieval complete. Top score: {results[0]['similarity_score']:.4f} "
+                   f"(BM25: {results[0]['bm25_score']:.4f}, Embedding: {results[0]['embedding_score']:.4f})")
+        
+        return results
+    
     def retrieve_similar_chunks(self, query, top_k=10, chat_history=None, num_chat_pairs=10):
         """
         Retrieve top-k most similar chunks to the query with optional chat history context
@@ -171,27 +261,16 @@ Examples:
         expanded_query = self._expand_query(rewritten_query)
         logger.info(f"Final query for retrieval: '{expanded_query}'")
         
-        # 3. Generate embedding for the final query
-        query_embedding = self.model.encode([expanded_query])[0]
+        # 3. Perform hybrid retrieval (combining BM25 and embeddings)
+        results = self._hybrid_retrieval(
+            query=expanded_query,
+            top_k=top_k,
+            bm25_weight=0.4,      # BM25 weight for keyword matching
+            embedding_weight=0.6   # Embedding weight for semantic similarity
+        )
         
-        # 4. Perform similarity search
-        similarities = cosine_similarity(
-            [query_embedding],
-            self.chunk_embeddings
-        )[0]
-        
-        # Get top-k most similar chunks
-        top_indices = np.argsort(similarities)[-top_k:][::-1]
-        
-        # Prepare results
-        results = []
-        for idx in top_indices:
-            results.append({
-                'chunk': self.chunks[idx],
-                'similarity_score': float(similarities[idx])
-            })
-        
-        logger.info(f"Retrieved {len(results)} chunks. Top similarity score: {results[0]['similarity_score']:.4f}")
+        logger.info(f"Retrieved {len(results)} chunks using hybrid retrieval. "
+                   f"Top hybrid score: {results[0]['similarity_score']:.4f}")
         
         return results, expanded_query
     
