@@ -79,6 +79,51 @@ class GeminiClient:
             
         except Exception as e:
             return f"Error generating response with Gemma 3 27b: {str(e)}"
+
+    def stream_query(self, prompt, history=None):
+        """Send a streaming query to the Gemma 3 27b model."""
+        try:
+            if history:
+                gemini_history = []
+                for msg in history:
+                    role = msg["role"]
+                    if role == "assistant":
+                        role = "model"
+                    gemini_history.append({"role": role, "parts": [msg["content"]]})
+                
+                chat = self.model.start_chat(history=gemini_history)
+                response_stream = chat.send_message(
+                    prompt,
+                    stream=True,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.7,
+                        top_p=0.9,
+                        top_k=40,
+                        max_output_tokens=1000,
+                    )
+                )
+            else:
+                response_stream = self.model.generate_content(
+                    prompt,
+                    stream=True,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.7,
+                        top_p=0.9,
+                        top_k=40,
+                        max_output_tokens=1000,
+                    )
+                )
+            
+            for chunk in response_stream:
+                try:
+                    yield chunk.text
+                except ValueError:
+                    # This can happen with the last chunk of the stream if it's empty.
+                    # We can safely ignore it.
+                    continue
+
+        except Exception as e:
+            yield f"Error during streaming: {str(e)}"
     
     def get_model_info(self):
         """

@@ -35,57 +35,52 @@ document.addEventListener('DOMContentLoaded', () => {
 // Handle send message
 async function handleSend() {
     const query = userInput.value.trim();
-    
-    if (!query || isProcessing) {
-        return;
-    }
-    
-    // Clear input and reset height
+    if (!query || isProcessing) return;
+
     userInput.value = '';
     userInput.style.height = 'auto';
-    
-    // Remove welcome message if present
+
     const welcomeMessage = document.querySelector('.welcome-message');
-    if (welcomeMessage) {
-        welcomeMessage.remove();
-    }
-    
-    // Add user message to chat
+    if (welcomeMessage) welcomeMessage.remove();
+
     addMessage(query, 'user');
     
-    // Show loading
+    // Create a new bot message container and get a reference to its content element
+    const botMessageContentElement = addMessage('', 'bot');
+
     setLoading(true);
-    
+
     try {
-        // Send request to backend
         const response = await fetch('/chat', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ query: query })
         });
-        
-        if (!response.ok) {
-            throw new Error('Failed to get response');
-        }
-        
-        const data = await response.json();
-        
-        // Hide loading
+
         setLoading(false);
-        
-        // Add bot response to chat
-        addMessage(data.response, 'bot', {
-            relevant: data.relevant,
-            needsClarification: data.needs_clarification,
-            similarityScore: data.top_similarity
-        });
-        
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullResponse = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value, { stream: true });
+            fullResponse += chunk;
+            botMessageContentElement.innerHTML = fullResponse.replace(/\n/g, '<br>');
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
     } catch (error) {
         console.error('Error:', error);
         setLoading(false);
-        addMessage('Sorry, I encountered an error processing your request. Please try again.', 'bot', { error: true });
+        botMessageContentElement.innerHTML = 'Sorry, I encountered an error. Please try again.';
     }
 }
 
@@ -101,16 +96,8 @@ async function handleClear() {
             chatContainer.innerHTML = `
                 <div class="welcome-message">
                     <div class="welcome-icon">💬</div>
-                    <h2>Welcome to ICICI Bank FAQ Assistant</h2>
-                    <p>I'm here to help you with questions about:</p>
-                    <ul class="feature-list">
-                        <li>Internet Banking & Account Services</li>
-                        <li>Credit & Debit Cards</li>
-                        <li>Fund Transfers & Payments</li>
-                        <li>Bill Payments & Transactions</li>
-                        <li>User ID & Password Management</li>
-                    </ul>
-                    <p class="welcome-footer">Type your question below to get started!</p>
+                    <h2>Welcome to the FAQ Assistant</h2>
+                    <p>I'm here to help with your questions about our services.</p>
                 </div>
             `;
             
@@ -122,7 +109,7 @@ async function handleClear() {
 }
 
 // Add message to chat
-function addMessage(content, type, metadata = {}) {
+function addMessage(content, type) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${type}`;
     
@@ -132,38 +119,16 @@ function addMessage(content, type, metadata = {}) {
     
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
-    
-    // Format message content (preserve line breaks)
-    const formattedContent = content.replace(/\n/g, '<br>');
-    contentDiv.innerHTML = formattedContent;
-    
-    // Add metadata tags if applicable
-    if (type === 'bot') {
-        const metadataDiv = document.createElement('div');
-        metadataDiv.className = 'message-metadata';
-        
-        if (metadata.relevant === false) {
-            contentDiv.innerHTML += '<span class="tag tag-irrelevant">Off-topic</span>';
-        }
-        
-        if (metadata.needsClarification) {
-            contentDiv.innerHTML += '<span class="tag tag-clarification">Needs Clarification</span>';
-        }
-        
-        // User requested to remove time and relevance score from the UI
-        
-        if (metadataDiv.textContent) {
-            contentDiv.appendChild(metadataDiv);
-        }
-    }
+    contentDiv.innerHTML = content.replace(/\n/g, '<br>');
     
     messageDiv.appendChild(avatarDiv);
     messageDiv.appendChild(contentDiv);
     
     chatContainer.appendChild(messageDiv);
-    
-    // Scroll to bottom
     chatContainer.scrollTop = chatContainer.scrollHeight;
+
+    // Return the content element so it can be updated during streaming
+    return contentDiv;
 }
 
 // Set loading state
