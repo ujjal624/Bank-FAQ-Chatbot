@@ -98,29 +98,71 @@ Your response:"""
     
     return is_relevant, response
 
-def generate_answer(query, retrieved_chunks, chat_history):
+def determine_unknown_query(query, retrieved_chunks, chat_history):
     """
-    Generate answer using LLM with RAG context and chat history
+    Use LLM to determine if there's sufficient information in the RAG context to answer the query
     
     Args:
         query (str): User query
-        retrieved_chunks (list): Retrieved FAQ chunks
-        chat_history (list): Last 10 chat interactions
+        retrieved_chunks (list): Retrieved FAQ chunks from RAG
+        chat_history (list): Previous chat interactions
         
     Returns:
-        str: Generated answer
+        tuple: (is_unknown, response)
+            - is_unknown (bool): True if query cannot be answered with available info
+            - response (str): The response to send to the user
     """
-    logger.info(f"Generating answer for query: '{query[:50]}...'")
+    logger.info(f"Determining if query has sufficient information: '{query[:50]}...'")
     
-    # Check if the query is well-covered by the retrieved FAQs
-    top_similarity = retrieved_chunks[0]['similarity_score'] if retrieved_chunks else 0
+    # # Check if the query is well-covered by the retrieved FAQs
+    # top_similarity = retrieved_chunks[0]['similarity_score'] if retrieved_chunks else 0
+    
     # Format context from retrieved chunks
-    context = rag_engine.format_context_for_llm(retrieved_chunks)
+    context = rag_engine.format_context_for_llm(retrieved_chunks) if retrieved_chunks else "No relevant FAQ context found."
     
     print("How context is being formatted: ", context)
-    # If similarity is low, treat as unknown query
-    if top_similarity < 0.5:
-        logger.warning(f"Low similarity score ({top_similarity:.2f}) - treating as unknown query")
+    
+    # Build evaluation prompt
+    evaluation_prompt = f"""You are an intelligent assistant evaluating whether you have sufficient information to answer a user's query.
+
+Available FAQ Knowledge Base:
+{context}
+
+User's Question: {query}
+
+TASK:
+Carefully analyze whether the provided FAQ knowledge base contains sufficient and relevant information to answer the user's question accurately.
+
+EVALUATION CRITERIA:
+1. Does the FAQ knowledge base contain specific information that directly addresses the user's question?
+2. Is the information complete enough to provide a helpful and accurate answer?
+3. Consider the conversation history if the question builds on previous context.
+
+OUTPUT FORMAT:
+You MUST respond in this exact format:
+
+STATUS: [SUFFICIENT or INSUFFICIENT]
+REASONING: [Brief explanation of your decision]
+
+If STATUS is SUFFICIENT, you will be asked to answer the question in the next step.
+If STATUS is INSUFFICIENT, provide a polite response explaining that the information is not available.
+
+Examples:
+- If FAQ has clear answer: STATUS: SUFFICIENT
+- If FAQ is vague or missing key details: STATUS: INSUFFICIENT
+- If FAQ is completely unrelated: STATUS: INSUFFICIENT
+
+Your evaluation:"""
+
+    evaluation_response = llm_client.query(evaluation_prompt, history=chat_history[-20:] if chat_history else None)
+    
+    logger.info(f"LLM evaluation result: {evaluation_response[:80]}...")
+    
+    # Parse the response to determine if it's unknown
+    is_unknown = "STATUS: INSUFFICIENT" in evaluation_response.upper() or "INSUFFICIENT" in evaluation_response.split('\n')[0].upper()
+    
+    if is_unknown:
+        logger.warning(f"LLM determined insufficient information to answer query")
         save_unknown_query(query, datetime.now().isoformat())
         
         # Return predetermined polite response without using LLM
@@ -130,12 +172,30 @@ def generate_answer(query, retrieved_chunks, chat_history):
                    "In the meantime, if you have any other banking-related questions, I'd be happy to help!")
         
         logger.info("Returned predetermined response for unknown query")
-        return response
+        return True, response
+    else:
+        logger.info("LLM determined sufficient information available")
+        return False, None
+
+
+def generate_answer(query, retrieved_chunks, chat_history):
+    """
+    Generate answer using LLM with RAG context and chat history
     
-    # # Format context from retrieved chunks
-    # context = rag_engine.format_context_for_llm(retrieved_chunks)
+    Args:
+        query (str): User query
+        retrieved_chunks (list): Retrieved FAQ chunks
+        chat_history (list): Last 20 chat interactions
+        
+    Returns:
+        str: Generated answer
+    """
+    logger.info(f"Generating answer for query: '{query[:50]}...'")
     
-    # print("How context is being formatted: ", context)
+    # Format context from retrieved chunks
+    context = rag_engine.format_context_for_llm(retrieved_chunks)
+    
+    print("How context is being formatted: ", context)
     # Build the prompt
     prompt = f"""You are a helpful HDFC Bank customer service assistant. Answer the user's question based on the provided FAQ knowledge base.
 
@@ -206,8 +266,16 @@ def chat():
                 'relevant': False
             })
         
-        # Step 3: Generate answer using LLM
-        answer = generate_answer(final_query, retrieved_chunks, chat_history)
+        # Step 3: Determine if we have sufficient information to answer (LLM-based evaluation)
+        is_unknown, unknown_response = determine_unknown_query(final_query, retrieved_chunks, chat_history)
+        
+        if is_unknown:
+            logger.info("Query identified as unknown - insufficient information to answer")
+            answer = unknown_response
+        else:
+            # Step 4: Generate answer using LLM (we have sufficient information)
+            answer = generate_answer(final_query, retrieved_chunks, chat_history)
+            logger.info("Answer generated successfully for the query")
         
         # Add to chat history
         chat_history.append({'role': 'user', 'content': user_query})
@@ -217,7 +285,7 @@ def chat():
         print("\n")
         session['chat_history'] = chat_history[-20:]  # Keep last 20 messages (10 interactions)
         
-        logger.info(f"Successfully processed query. Chat history length: {len(chat_history)}")
+        logger.info(f" Chat history length: {len(chat_history)}")
         
         return jsonify({
             'response': answer,
