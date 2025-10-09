@@ -234,25 +234,29 @@ body {
     color: #6c757d;
 }
 
-/* Loading Indicator */
-.loading {
-    position: fixed;
-    bottom: 120px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(255, 255, 255, 0.95);
-    padding: 10px 20px;
-    border-radius: 20px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+/* Typing Indicator */
+.typing-indicator {
     display: flex;
     align-items: center;
-    gap: 10px;
-    z-index: 1000;
-    border: 1px solid var(--border-color);
+    padding: 12px 0px;
 }
 
-.loading-dots .dot {
-    background: var(--icici-saffron-dark);
+.typing-indicator span {
+    height: 8px;
+    width: 8px;
+    background-color: #ccc; /* Lighter shade for dots */
+    border-radius: 50%;
+    display: inline-block;
+    margin: 0 2px;
+    animation: typing-bounce 1.4s infinite ease-in-out both;
+}
+
+.typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+.typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes typing-bounce {
+    0%, 80%, 100% { transform: scale(0); }
+    40% { transform: scale(1.0); }
 }
 
 /* Scrollbar Styling */

@@ -45,10 +45,12 @@ async function handleSend() {
 
     addMessage(query, 'user');
     
-    // Create a new bot message container and get a reference to its content element
+    // Create a new bot message container and add the typing indicator
     const botMessageContentElement = addMessage('', 'bot');
+    botMessageContentElement.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+    chatContainer.scrollTop = chatContainer.scrollHeight;
 
-    setLoading(true);
+    setLoading(true); // Disables the send button
 
     try {
         const response = await fetch('/chat', {
@@ -57,8 +59,6 @@ async function handleSend() {
             body: JSON.stringify({ query: query })
         });
 
-        setLoading(false);
-
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -66,10 +66,16 @@ async function handleSend() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let fullResponse = '';
+        let isFirstChunk = true;
 
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+
+            if (isFirstChunk) {
+                botMessageContentElement.innerHTML = ''; // Clear the typing indicator
+                isFirstChunk = false;
+            }
             
             const chunk = decoder.decode(value, { stream: true });
             fullResponse += chunk;
@@ -79,8 +85,9 @@ async function handleSend() {
 
     } catch (error) {
         console.error('Error:', error);
-        setLoading(false);
         botMessageContentElement.innerHTML = 'Sorry, I encountered an error. Please try again.';
+    } finally {
+        setLoading(false); // Re-enables the send button
     }
 }
 
@@ -131,11 +138,10 @@ function addMessage(content, type) {
     return contentDiv;
 }
 
-// Set loading state
+// Set loading state (only handles button state now)
 function setLoading(state) {
     isProcessing = state;
     sendBtn.disabled = state;
-    loading.style.display = state ? 'flex' : 'none';
     
     if (!state) {
         userInput.focus();
