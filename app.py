@@ -206,38 +206,43 @@ def chat():
         
         logger.info(f"Received chat request: '{user_query}'")
         
-        if 'chat_history' not in session:
-            session['chat_history'] = []
-        chat_history = session['chat_history']
-        
+        chat_history = data.get('history', [])
+
         # --- Streaming Logic ---
         def stream_response_generator():
+            # This generator function now handles the core logic and streams the final response.
+            
             # Step 1: Split combined queries
             sub_queries = split_combined_query(user_query)
             
             all_answers = []
-            is_multiquery = len(sub_queries) > 1
+            all_retrieved_chunks_for_prompt = [] # For single-query context
+            final_query_for_single_prompt = user_query
 
-            # Step 2: Process each sub-query to gather context and answers
+            # Step 2: Process each sub-query
             for sub_query in sub_queries:
-                if not sub_query:
-                    continue
+                if not sub_query: continue
 
                 retrieved_chunks, final_query = rag_engine.retrieve_similar_chunks(
-                    sub_query, top_k=5, chat_history=chat_history[-10:], num_chat_pairs=5
+                    sub_query, top_k=5, chat_history=chat_history, num_chat_pairs=5
                 )
+                
+                # Store chunks for single-query prompt context
+                if len(sub_queries) == 1:
+                    all_retrieved_chunks_for_prompt = retrieved_chunks
+                    final_query_for_single_prompt = final_query
+
                 is_relevant, _ = check_relevance(sub_query, retrieved_chunks, chat_history)
                 
                 if is_relevant:
-                    # We need the full answer for synthesis, so we use the blocking call here
                     answer = generate_answer(final_query, retrieved_chunks, chat_history)
                     all_answers.append(answer)
                 else:
-                    all_answers.append(f"Regarding '{sub_query}', I can only assist with banking topics.")
+                    all_answers.append(f"Regarding '{sub_query}', I can only assist with banking-related topics.")
 
             # Step 3: Determine the final prompt for streaming
             final_prompt = ""
-            if is_multiquery:
+            if len(all_answers) > 1:
                 qa_pairs_str = ""
                 for i, (question, answer) in enumerate(zip(sub_queries, all_answers), 1):
                     qa_pairs_str += f"Question {i}: {question}\nAnswer {i}: {answer}\n\n"
@@ -250,25 +255,24 @@ Processed Questions and Answers:
 {qa_pairs_str}
 
 Your Final, Synthesized Response:"""
+            
             elif all_answers:
-                # If single query, we just stream the already generated answer for simplicity.
-                # A more optimized way would be to stream the generate_answer call itself.
-                final_response_text = all_answers[0]
-            else:
-                final_response_text = "I'm sorry, I couldn't find a relevant answer. Please try rephrasing."
+                # Re-create the prompt for the single answer to stream it properly
+                context = rag_engine.format_context_for_llm(all_retrieved_chunks_for_prompt)
+                final_prompt = f"""You are a helpful HDFC Bank customer service assistant. Answer the user's question based on the provided FAQ knowledge base.
 
-            # Step 4: Stream the final response
-            if final_prompt:
-                full_response = ""
-                for chunk in llm_client.stream_query(final_prompt):
-                    full_response += chunk
-                    yield chunk
-                # Save full response to history
-                session['chat_history'] = chat_history + [{'role': 'user', 'content': user_query}, {'role': 'assistant', 'content': full_response}]
+{context}
+
+User's Question: {final_query_for_single_prompt}
+
+Your Answer:"""
             else:
-                yield final_response_text
-                # Save response to history
-                session['chat_history'] = chat_history + [{'role': 'user', 'content': user_query}, {'role': 'assistant', 'content': final_response_text}]
+                yield "I'm sorry, I couldn't find a relevant answer. Please try rephrasing."
+                return
+
+            # Step 4: Stream the final response from the determined prompt
+            for chunk in llm_client.stream_query(final_prompt, chat_history):
+                yield chunk
 
         return Response(stream_response_generator(), mimetype='text/plain')
 
@@ -276,12 +280,6 @@ Your Final, Synthesized Response:"""
         logger.error(f"Error processing chat request: {str(e)}", exc_info=True)
         return jsonify({'error': 'An error occurred processing your request'}), 500
 
-@app.route('/clear_history', methods=['POST'])
-def clear_history():
-    """Clear chat history"""
-    logger.info("Clearing chat history")
-    session['chat_history'] = []
-    return jsonify({'status': 'success'})
 
 @app.route('/unknown_queries', methods=['GET'])
 def get_unknown_queries():

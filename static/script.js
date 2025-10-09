@@ -7,6 +7,7 @@ const loading = document.getElementById('loading');
 
 // State
 let isProcessing = false;
+let chatHistory = []; // Client-side history
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -44,19 +45,19 @@ async function handleSend() {
     if (welcomeMessage) welcomeMessage.remove();
 
     addMessage(query, 'user');
+    chatHistory.push({ role: 'user', content: query });
     
-    // Create a new bot message container and add the typing indicator
     const botMessageContentElement = addMessage('', 'bot');
     botMessageContentElement.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
     chatContainer.scrollTop = chatContainer.scrollHeight;
 
-    setLoading(true); // Disables the send button
+    setLoading(true);
 
     try {
         const response = await fetch('/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: query })
+            body: JSON.stringify({ query: query, history: chatHistory })
         });
 
         if (!response.ok) {
@@ -73,7 +74,7 @@ async function handleSend() {
             if (done) break;
 
             if (isFirstChunk) {
-                botMessageContentElement.innerHTML = ''; // Clear the typing indicator
+                botMessageContentElement.innerHTML = '';
                 isFirstChunk = false;
             }
             
@@ -82,36 +83,28 @@ async function handleSend() {
             botMessageContentElement.innerHTML = fullResponse.replace(/\n/g, '<br>');
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
+        
+        chatHistory.push({ role: 'assistant', content: fullResponse });
 
     } catch (error) {
         console.error('Error:', error);
         botMessageContentElement.innerHTML = 'Sorry, I encountered an error. Please try again.';
     } finally {
-        setLoading(false); // Re-enables the send button
+        setLoading(false);
     }
 }
 
 // Handle clear chat
-async function handleClear() {
+function handleClear() {
     if (confirm('Are you sure you want to clear the chat history?')) {
-        try {
-            await fetch('/clear_history', {
-                method: 'POST'
-            });
-            
-            // Clear chat container
-            chatContainer.innerHTML = `
-                <div class="welcome-message">
-                    <div class="welcome-icon">💬</div>
-                    <h2>Welcome to the FAQ Assistant</h2>
-                    <p>I'm here to help with your questions about our services.</p>
-                </div>
-            `;
-            
-        } catch (error) {
-            console.error('Error clearing history:', error);
-            alert('Failed to clear history. Please try again.');
-        }
+        chatHistory = []; // Clear local history
+        chatContainer.innerHTML = `
+            <div class="welcome-message">
+                <div class="welcome-icon">💬</div>
+                <h2>Welcome to the FAQ Assistant</h2>
+                <p>I'm here to help with your questions about our services.</p>
+            </div>
+        `;
     }
 }
 
